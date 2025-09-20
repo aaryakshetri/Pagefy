@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>PDF Assistant</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      max-width: 860px;
+      margin: 2rem auto;
+      padding: 0 1rem;
+      color: #1f2937;
+      line-height: 1.55;
+      background: #f9fafb;
+    }
+    h1 { margin-bottom: 0.2rem; }
+    .subtitle { color: #6b7280; margin-top: 0; margin-bottom: 1.5rem; }
+    h3 { margin-top: 0; }
+    .card {
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      padding: 1.25rem;
+      margin-bottom: 1rem;
+      background: white;
+    }
+    .upload-zone {
+      display: block;
+      border: 2px dashed #cbd5e1;
+      padding: 2rem;
+      text-align: center;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .upload-zone:hover { border-color: #2563eb; background: #f8fafc; }
+    button {
+      background: #2563eb;
+      color: white;
+      border: none;
+      padding: 0.55rem 1.1rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.92rem;
+      margin: 0.2rem 0.2rem 0.2rem 0;
+      font-weight: 500;
+    }
+    button:hover { background: #1d4ed8; }
+    button:disabled { background: #9ca3af; cursor: not-allowed; }
+    button.secondary { background: #f3f4f6; color: #111827; border: 1px solid #e5e7eb; }
+    button.secondary:hover { background: #e5e7eb; }
+    input[type="text"] {
+      width: 100%;
+      padding: 0.6rem 0.8rem;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      font-size: 1rem;
+    }
+    input[type="text"]:focus { outline: 2px solid #2563eb; border-color: transparent; }
+    .output {
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      padding: 1rem;
+      margin-top: 0.75rem;
+      white-space: pre-wrap;
+      min-height: 3rem;
+    }
+    .status { font-size: 0.9rem; margin-top: 0.75rem; }
+    .hidden { display: none; }
+    .sources {
+      font-size: 0.82rem;
+      color: #6b7280;
+      margin-top: 1rem;
+      padding-top: 0.75rem;
+      border-top: 1px solid #e5e7eb;
+    }
+    .source-item { margin-top: 0.4rem; }
+    .loader { color: #6b7280; font-style: italic; }
+  </style>
+</head>
+<body>
+  <h1>📄 PDF Assistant</h1>
+  <p class="subtitle">Upload a PDF, then summarize, ask questions, or extract lists.</p>
+
+  <div class="card">
+    <label class="upload-zone" for="fileInput">
+      <div id="uploadLabel"><strong>Click to upload a PDF</strong><br><span style="color: #6b7280; font-size: 0.9rem;">Max 25 MB</span></div>
+      <input type="file" id="fileInput" accept=".pdf" style="display:none">
+    </label>
+    <div id="docStatus" class="status"></div>
+  </div>
+
+  <div id="tools" class="hidden">
+    <div class="card">
+      <h3>Ask a question</h3>
+      <input type="text" id="question" placeholder="e.g., What are the main conclusions?">
+      <div style="margin-top: 0.6rem;">
+        <button onclick="askQuestion()">Ask</button>
+      </div>
+      <div id="answer" class="output hidden"></div>
+    </div>
+
+    <div class="card">
+      <h3>Summarize &amp; Extract</h3>
+      <button onclick="summarize()">📝 Summarize</button>
+      <button class="secondary" onclick="extractList('key_points')">🔑 Key Points</button>
+      <button class="secondary" onclick="extractList('action_items')">✅ Action Items</button>
+      <button class="secondary" onclick="extractList('questions')">❓ Questions</button>
+      <button class="secondary" onclick="extractList('entities')">🏷️ Entities</button>
+      <div id="extractOutput" class="output hidden"></div>
+    </div>
+  </div>
+
+  <script>
+    let docId = null;
+
+    document.getElementById("fileInput").addEventListener("change", async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const status = document.getElementById("docStatus");
+      status.textContent = "⏳ Processing PDF (this may take a moment)...";
+      status.style.color = "#6b7280";
+
+      const fd = new FormData();
+      fd.append("file", file);
+
+      try {
+        const res = await fetch("/upload", { method: "POST", body: fd });
+        const data = await res.json();
+
+        if (data.error) {
+          status.textContent = "❌ " + data.error;
+          status.style.color = "#dc2626";
+          return;
+        }
+
+        docId = data.doc_id;
+        status.innerHTML = `✅ <strong>${escapeHtml(data.filename)}</strong> loaded — ${data.num_chunks} chunks, ${data.char_count.toLocaleString()} chars`;
+        status.style.color = "#059669";
+        document.getElementById("tools").classList.remove("hidden");
+      } catch (err) {
+        status.textContent = "❌ Upload failed: " + err.message;
+        status.style.color = "#dc2626";
+      }
+    });
+
+    async function askQuestion() {
+      const q = document.getElementById("question").value.trim();
+      if (!q || !docId) return;
+
+      const out = document.getElementById("answer");
+      out.classList.remove("hidden");
+      out.innerHTML = '<span class="loader">Thinking...</span>';
+
+      try {
+        const res = await fetch("/ask", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ doc_id: docId, question: q }),
+        });
+        const data = await res.json();
+
+        if (data.error) {
+          out.textContent = "Error: " + data.error;
+          return;
+        }
+
+        let html = escapeHtml(data.answer);
+        if (data.sources?.length) {
+          html += '<div class="sources"><strong>Retrieved excerpts:</strong>';
+          data.sources.forEach((s, i) => {
+            html += `<div class="source-item">[${i+1}] (score: ${s.score}) ${escapeHtml(s.text)}...</div>`;
+          });
+          html += '</div>';
+        }
+        out.innerHTML = html;
+      } catch (err) {
+        out.textContent = "Request failed: " + err.message;
+      }
+    }
+
+    async function summarize() {
+      if (!docId) return;
+      const out = document.getElementById("extractOutput");
+      out.classList.remove("hidden");
+      out.innerHTML = '<span class="loader">Summarizing...</span>';
+
+      try {
+        const res = await fetch("/summarize", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ doc_id: docId }),
+        });
+        const data = await res.json();
+        out.textContent = data.summary || ("Error: " + data.error);
+      } catch (err) {
+        out.textContent = "Request failed: " + err.message;
+      }
+    }
+
+    async function extractList(type) {
+      if (!docId) return;
+      const out = document.getElementById("extractOutput");
+      out.classList.remove("hidden");
+      out.innerHTML = '<span class="loader">Extracting...</span>';
+
+      try {
+        const res = await fetch("/extract", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ doc_id: docId, type: type }),
+        });
+        const data = await res.json();
+        out.textContent = data.result || ("Error: " + data.error);
+      } catch (err) {
+        out.textContent = "Request failed: " + err.message;
+      }
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      }[c]));
+    }
+
+    document.getElementById("question").addEventListener("keypress", (e) => {
+      if (e.key === "Enter") askQuestion();
+    });
+  </script>
+</body>
+</html>
