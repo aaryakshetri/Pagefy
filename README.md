@@ -1,3 +1,5 @@
+# Author - Aarya Kshetri
+
 # Pagefy — PDF Assistant
 
 A small Flask app that lets you upload a PDF and then summarize it, ask questions, or extract structured lists — powered by a tiny RAG pipeline using free/local tools.
